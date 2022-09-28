@@ -5,37 +5,42 @@ using UnityEngine;
 public class Player : NetworkBehaviour {
 
 
-    public NetworkVariable<Vector3> Position = new NetworkVariable<Vector3>();
+    public NetworkVariable<Vector3> PositionChange = new NetworkVariable<Vector3>();
+    public NetworkVariable<Vector3> RotationChange = new NetworkVariable<Vector3>();
     public NetworkVariable<Color> PlayerColor = new NetworkVariable<Color>(Color.red);
 
     private GameManager _gameMgr;
+    private Camera _camera;
     public float movementSpeed = .5f;
-
-
-    public override void OnNetworkSpawn() {
-        if (IsOwner) {
-            _gameMgr = GameObject.Find("GameManager").GetComponent<GameManager>();
-            _gameMgr.RequestNewPlayerColorServerRpc();
-        }
-    }
-
-
-    [ServerRpc]
-    void RequestPositionForMovementServerRpc(Vector3 movement) {
-        if (!IsServer && !IsHost) return;
-
-        float planeSize = 5f;
-        Vector3 newPosition = Position.Value + movement;
-        newPosition.x = Mathf.Clamp(newPosition.x, planeSize * -1, planeSize);
-        newPosition.z = Mathf.Clamp(newPosition.z, planeSize * -1, planeSize);
-
-        Position.Value = newPosition;
-    }
+    public float rotationSpeed = 1f;
+    private BulletSpawner _bulletSpawner;
 
     private void Start() {
         ApplyPlayerColor();
         PlayerColor.OnValueChanged += OnPlayerColorChanged;
+        _bulletSpawner = transform.Find("LArm").transform.Find("BulletSpawner").GetComponent<BulletSpawner>();
     }
+
+    public override void OnNetworkSpawn() {
+        _camera = transform.Find("Camera").GetComponent<Camera>();
+        if (IsOwner) {
+            _gameMgr = GameObject.Find("GameManager").GetComponent<GameManager>();
+            _gameMgr.RequestNewPlayerColorServerRpc();
+        }
+        _camera.enabled = IsOwner;
+    }
+    
+
+
+    [ServerRpc]
+    void RequestPositionForMovementServerRpc(Vector3 posChange, Vector3 rotChange) {
+        if (!IsServer && !IsHost) return;
+
+        PositionChange.Value = posChange;
+        RotationChange.Value = rotChange;
+    }
+
+
 
     public void OnPlayerColorChanged(Color previous, Color current) {
         ApplyPlayerColor();
@@ -43,24 +48,47 @@ public class Player : NetworkBehaviour {
 
     public void ApplyPlayerColor() {
         GetComponent<MeshRenderer>().material.color = PlayerColor.Value;
+        transform.Find("LArm").GetComponent<MeshRenderer>().material.color = PlayerColor.Value;
+        transform.Find("RArm").GetComponent<MeshRenderer>().material.color = PlayerColor.Value;
     }
 
 
-    Vector3 CalcMovement() {
-        Vector3 moveVect = new Vector3(Input.GetAxis("Horizontal"), 0, Input.GetAxis("Vertical"));
-        moveVect *= movementSpeed;
-        return moveVect;
+    private Vector3[] CalcMovement() {
+        bool isShiftKeyDown = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+        float x_move = 0.0f;
+        float z_move = Input.GetAxis("Vertical");
+        float y_rot = 0.0f;
+
+        if (isShiftKeyDown) {
+            x_move = Input.GetAxis("Horizontal");
+        } else {
+            y_rot = Input.GetAxis("Horizontal");
+            }
+         
+
+         Vector3 moveVect = new Vector3(x_move, 0, z_move);
+         moveVect *= movementSpeed;
+
+         Vector3 rotVect = new Vector3(0, y_rot, 0);
+         rotVect *= rotationSpeed;
+
+         return new[] { moveVect, rotVect};
     }
+    
 
 
     void Update() {
         if (IsOwner) {
-            Vector3 moveVect = CalcMovement();
-            if (moveVect.magnitude > 0) {
-                RequestPositionForMovementServerRpc(moveVect);
+            Vector3[] results = CalcMovement();
+            RequestPositionForMovementServerRpc(results[0], results[1]);
+            if (Input.GetButtonDown("Fire1")) {
+                _bulletSpawner.FireServerRpc();
             }
-        } else {
-            transform.position = Position.Value;
+            }
+
+            if(!IsOwner || IsHost) {
+            transform.Translate(PositionChange.Value);
+            transform.Rotate(RotationChange.Value);
         }
     }
 }
